@@ -1,0 +1,7 @@
+{
+  "name": "Instant LPJ Generator",
+  "description": "A professional tool for community leaders to generate official financial accountability reports (LPJ) instantly. Features offline storage, image receipts, and AI-powered narrative generation.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
