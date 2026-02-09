@@ -4,12 +4,22 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { LPJData } from "../types";
 import { formatIDR } from "../utils";
 
-// The API key is obtained exclusively from the environment variable process.env.API_KEY.
-// Manual key management UI and localStorage are removed as per developer guidelines.
+const API_KEY_STORAGE = 'user_manual_api_key';
+
+const getApiKey = () => {
+  // Prioritaskan kunci manual dari user di localStorage
+  const manualKey = localStorage.getItem(API_KEY_STORAGE);
+  if (manualKey && manualKey.trim() !== '') return manualKey;
+  
+  // Fallback ke environment variable
+  return process.env.API_KEY || "";
+};
 
 export const generateReportNarrative = async (data: LPJData) => {
-  /* Create a new GoogleGenAI instance right before the call to ensure it uses the latest environment configuration. */
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("API_KEY_MISSING");
+
+  const ai = new GoogleGenAI({ apiKey: apiKey });
   const isLengkap = data.config.reportMode === 'Lengkap';
 
   const totalIncome = data.transactions
@@ -86,7 +96,6 @@ export const generateReportNarrative = async (data: LPJData) => {
 
   try {
     const response = await ai.models.generateContent({
-      /* Using 'gemini-3-pro-preview' for complex text generation tasks. */
       model: 'gemini-3-pro-preview',
       contents: { parts: [{ text: prompt }] },
       config: {
@@ -94,7 +103,6 @@ export const generateReportNarrative = async (data: LPJData) => {
         responseSchema: responseSchema
       }
     });
-    /* The .text property is a direct string accessor, not a method. */
     return JSON.parse(response.text?.trim() || '{}');
   } catch (error) {
     console.error("AI Narrative Error:", error);
@@ -103,8 +111,10 @@ export const generateReportNarrative = async (data: LPJData) => {
 };
 
 export const analyzeReceipt = async (base64Image: string) => {
-  /* Create a new GoogleGenAI instance right before the call. */
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("API_KEY_MISSING");
+
+  const ai = new GoogleGenAI({ apiKey: apiKey });
 
   const mimeType = base64Image.split(';')[0].split(':')[1];
   const base64Data = base64Image.split(',')[1];
@@ -135,7 +145,6 @@ export const analyzeReceipt = async (base64Image: string) => {
 
   try {
     const response = await ai.models.generateContent({
-      /* Using 'gemini-3-pro-preview' for multimodal tasks involving complex parsing. */
       model: 'gemini-3-pro-preview',
       contents: {
         parts: [
@@ -166,7 +175,6 @@ export const analyzeReceipt = async (base64Image: string) => {
         }
       }
     });
-    /* Access the text property directly. */
     return JSON.parse(response.text?.trim() || '{}');
   } catch (error) {
     console.error("Scan Error:", error);
