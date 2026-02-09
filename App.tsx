@@ -103,7 +103,9 @@ const App: React.FC = () => {
         const parsed = JSON.parse(saved);
         setTransactions(parsed.transactions || []);
         setConfig(prev => ({ ...prev, ...(parsed.config || {}) }));
-      } catch (e) {}
+      } catch (e) {
+        console.error("Gagal memuat data tersimpan:", e);
+      }
     }
     
     // Cek status kunci API di localStorage
@@ -112,8 +114,14 @@ const App: React.FC = () => {
       setHasApiKey(true);
       setManualKeyInput(storedKey);
     } else {
-      // Jika environment variable tersedia, anggap punya
-      setHasApiKey(!!process.env.API_KEY && process.env.API_KEY !== "");
+      // Pengecekan aman terhadap environment variable
+      try {
+        // @ts-ignore
+        const envKey = window.process?.env?.API_KEY || (typeof process !== 'undefined' ? process.env?.API_KEY : "");
+        setHasApiKey(!!envKey && envKey !== "");
+      } catch (e) {
+        setHasApiKey(false);
+      }
     }
     
     setHasLoaded(true);
@@ -175,6 +183,7 @@ const App: React.FC = () => {
           setTransactions(prev => [...prev, ...mapped]);
         }
       } catch (err: any) {
+        console.error("Gagal Scan Nota:", err);
         alert("Gagal memproses nota. Pastikan gambar jelas dan API Key sudah terpasang.");
       } finally {
         setIsScanningAI(false);
@@ -555,6 +564,7 @@ const App: React.FC = () => {
                         }
                       }
                     } catch (err: any) {
+                        console.error("Gagal Narasi AI:", err);
                         alert("AI gagal memproses narasi. Pastikan data terisi dan API Key sudah diatur di menu KUNCI.");
                     } finally {
                       setIsGeneratingAI(false);
