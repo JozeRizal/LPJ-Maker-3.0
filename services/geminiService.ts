@@ -6,13 +6,25 @@ import { formatIDR } from "../utils";
 
 const API_KEY_STORAGE = 'user_manual_api_key';
 
-const getApiKey = () => {
-  // Prioritaskan kunci manual dari user di localStorage
-  const manualKey = localStorage.getItem(API_KEY_STORAGE);
-  if (manualKey && manualKey.trim() !== '') return manualKey;
+const getApiKey = (): string => {
+  // 1. Cek localStorage (Input manual user)
+  try {
+    const manualKey = localStorage.getItem(API_KEY_STORAGE);
+    if (manualKey && manualKey.trim() !== '') {
+      return manualKey.trim();
+    }
+  } catch (e) {
+    console.warn("Gagal mengakses localStorage:", e);
+  }
   
-  // Fallback ke environment variable
-  return process.env.API_KEY || "";
+  // 2. Fallback ke window.process (Shim di index.html) atau process global
+  try {
+    // @ts-ignore - Menghindari error type checking pada lingkungan yang tidak memiliki global process
+    const envKey = (window.process?.env?.API_KEY) || (typeof process !== 'undefined' ? process.env?.API_KEY : "");
+    return envKey || "";
+  } catch (e) {
+    return "";
+  }
 };
 
 export const generateReportNarrative = async (data: LPJData) => {
@@ -96,7 +108,7 @@ export const generateReportNarrative = async (data: LPJData) => {
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-preview',
+      model: 'gemini-3-flash-preview',
       contents: { parts: [{ text: prompt }] },
       config: {
         responseMimeType: "application/json",
@@ -145,7 +157,7 @@ export const analyzeReceipt = async (base64Image: string) => {
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-preview',
+      model: 'gemini-3-flash-preview',
       contents: {
         parts: [
           { inlineData: { mimeType: mimeType, data: base64Data } },
