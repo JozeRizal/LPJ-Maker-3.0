@@ -9,7 +9,6 @@ import html2canvas from 'html2canvas';
 import { Transaction, TransactionType, ReportConfig, ReportMode } from './types';
 import { formatIDR, fileToBase64, generateId, toTitleCase } from './utils';
 import { generateReportNarrative, analyzeReceipt } from './services/geminiService';
-import { exportToWord } from './services/wordService';
 
 const STORAGE_KEY = 'lpj_master_v9';
 const API_KEY_STORAGE = 'user_manual_api_key';
@@ -159,122 +158,131 @@ const App: React.FC = () => {
     
     try {
       window.scrollTo(0, 0);
-      await new Promise(r => setTimeout(r, 600));
+      await new Promise(r => setTimeout(r, 800));
       
       const element = reportRef.current;
-      // Nilai pixel A4 standard 96 DPI
-      const pageHeightPx = 1122.5; 
-      const footerBuffer = 50; 
+      // KONTROL PRESISI TINGGI (96 DPI Standard)
+      const pageHeightPx = 1122; 
+      const topPagePadding = 60; // Margin atas ekstra di tiap halaman (permintaan user)
+      const bottomBuffer = 80;   // Zona aman deteksi potong
 
+      // Bersihkan spacer lama
       element.querySelectorAll('.pdf-spacer').forEach(s => s.remove());
 
-      const getElementTop = (el: HTMLElement) => {
-        let top = 0;
-        let curr: HTMLElement | null = el;
-        while (curr && curr !== element) {
-          top += curr.offsetTop;
-          curr = curr.offsetParent as HTMLElement;
-        }
-        return top;
+      const getAbsoluteTop = (el: HTMLElement) => {
+        const rect = el.getBoundingClientRect();
+        const rootRect = element.getBoundingClientRect();
+        return rect.top - rootRect.top;
       };
 
-      const injectSpacer = (el: HTMLElement, height: number) => {
-        if (height <= 0) return;
-        const spacer = document.createElement('div');
-        spacer.className = 'pdf-spacer';
-        spacer.style.height = `${height}px`;
-        spacer.style.width = '100%';
-        spacer.style.backgroundColor = 'transparent';
-        el.parentNode?.insertBefore(spacer, el);
+      const injectSpacer = (target: HTMLElement, h: number) => {
+        if (h <= 0) return;
+        const s = document.createElement('div');
+        s.className = 'pdf-spacer';
+        s.style.height = `${h}px`;
+        s.style.width = '100%';
+        s.style.display = 'block';
+        s.style.clear = 'both';
+        target.parentNode?.insertBefore(s, target);
       };
 
-      const injectTableSpacer = (tr: HTMLTableRowElement, height: number) => {
-        if (height <= 0) return;
-        const spacerTr = document.createElement('tr');
-        spacerTr.className = 'pdf-spacer';
-        const spacerTd = document.createElement('td');
-        spacerTd.colSpan = 10;
-        spacerTd.style.height = `${height}px`;
-        spacerTd.style.border = 'none';
-        spacerTd.style.padding = '0';
-        spacerTr.appendChild(spacerTd);
-        tr.parentNode?.insertBefore(spacerTr, tr);
+      const injectTableSpacer = (targetTr: HTMLTableRowElement, h: number) => {
+        if (h <= 0) return;
+        const sTr = document.createElement('tr');
+        sTr.className = 'pdf-spacer';
+        const sTd = document.createElement('td');
+        sTd.colSpan = 10;
+        sTd.style.height = `${h}px`;
+        sTd.style.border = 'none';
+        sTd.style.padding = '0';
+        sTr.appendChild(sTd);
+        targetTr.parentNode?.insertBefore(sTr, targetTr);
       };
 
-      // 1. FORCE NEW PAGE UNTUK BAGIAN KRUSIAL
-      // Menambahkan '.keuangan-start' agar tabel keuangan selalu di halaman baru
-      const hardBreakTargets = ['.kop-section', '.keuangan-start', '.signature-start', '.lampiran-start'];
-      hardBreakTargets.forEach(sel => {
+      // 1. HARD BREAK & TOP MARGIN FOR MAJOR SECTIONS
+      // Daftar seksi yang WAJIB mulai halaman baru + dapet margin atas
+      const hardBreakSections = ['.kop-section', '.keuangan-start', '.signature-start', '.lampiran-start'];
+      
+      hardBreakSections.forEach(sel => {
         const el = element.querySelector(sel) as HTMLElement;
         if (!el) return;
-        const top = getElementTop(el);
-        const pageIdx = Math.floor(top / pageHeightPx);
-        const nextPageTop = (pageIdx + 1) * pageHeightPx;
-        const diff = nextPageTop - top;
-        // Hanya injeksi jika diff cukup besar (berarti elemen tidak di paling atas halaman)
-        if (diff > 10) {
-           injectSpacer(el, diff);
+        
+        const currentTop = getAbsoluteTop(el);
+        const pageIdx = Math.floor(currentTop / pageHeightPx);
+        const nextPageStart = (pageIdx + 1) * pageHeightPx;
+        
+        // Selalu dorong ke halaman baru kecuali jika sudah di paling atas halaman pertama
+        if (currentTop > 50) {
+            const gapToNextPage = nextPageStart - currentTop;
+            injectSpacer(el, gapToNextPage + topPagePadding);
         }
       });
 
-      // 2. PROTEKSI BARIS TABEL (TR) - Agar tidak terpotong horizontal
+      // 2. PREVENT SLICING ON TABLE ROWS (TR)
       const trs = Array.from(element.querySelectorAll('table tbody tr')) as HTMLTableRowElement[];
       trs.forEach(tr => {
-        const top = getElementTop(tr);
-        const height = tr.offsetHeight;
+        const top = getAbsoluteTop(tr);
+        const h = tr.offsetHeight;
         const pageIdx = Math.floor(top / pageHeightPx);
         const pageBottom = (pageIdx + 1) * pageHeightPx;
 
-        if (top + height > pageBottom - footerBuffer) {
-          const diff = pageBottom - top;
-          injectTableSpacer(tr, diff + 1); // Tambah 1px toleransi
+        // Jika baris memotong garis halaman atau terlalu dekat margin bawah
+        if (top + h > pageBottom - bottomBuffer) {
+          const gapToNextPage = pageBottom - top;
+          injectTableSpacer(tr, gapToNextPage + topPagePadding);
         }
       });
 
-      // 3. PROTEKSI NOTA LAMPIRAN
-      const cards = Array.from(element.querySelectorAll('.receipt-card')) as HTMLElement[];
-      cards.forEach(card => {
-        const top = getElementTop(card);
-        const height = card.offsetHeight;
+      // 3. PREVENT SLICING ON HEADINGS & TEXT BLOCKS
+      const blocks = Array.from(element.querySelectorAll('h3, .pdf-text-block, .receipt-card')) as HTMLElement[];
+      blocks.forEach(blk => {
+        const top = getAbsoluteTop(blk);
+        const h = blk.offsetHeight;
         const pageIdx = Math.floor(top / pageHeightPx);
         const pageBottom = (pageIdx + 1) * pageHeightPx;
 
-        if (top + height > pageBottom - footerBuffer) {
-          const diff = pageBottom - top;
-          injectSpacer(card, diff + 5);
+        if (top + h > pageBottom - bottomBuffer) {
+          const gapToNextPage = pageBottom - top;
+          injectSpacer(blk, gapToNextPage + topPagePadding);
         }
       });
 
-      await new Promise(r => setTimeout(r, 1500));
+      // Tunggu render ulang layout setelah injeksi spacer
+      await new Promise(r => setTimeout(r, 1200));
 
       const canvas = await html2canvas(element, {
-        scale: 2, 
-        useCORS: true, 
+        scale: 2,
+        useCORS: true,
         backgroundColor: "#ffffff",
-        logging: false, 
+        logging: false,
         scrollY: 0,
         windowWidth: element.scrollWidth,
-        windowHeight: element.scrollHeight
+        windowHeight: element.scrollHeight,
       });
 
+      // Hapus spacer setelah capture agar tampilan web tidak berantakan
       element.querySelectorAll('.pdf-spacer').forEach(s => s.remove());
 
-      const imgData = canvas.toDataURL('image/jpeg', 0.95);
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = 210;
-      const pdfHeight = 297; 
-      const canvasHeightMm = (canvas.height * pdfWidth) / canvas.width;
+      const pdfHeight = 297;
       
-      let heightRemaining = canvasHeightMm;
+      const imgWidth = pdfWidth;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      const imgData = canvas.toDataURL('image/jpeg', 0.98);
+
+      let heightRemaining = imgHeight;
       let position = 0;
 
-      pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, canvasHeightMm);
+      // Halaman Pertama
+      pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
       heightRemaining -= pdfHeight;
 
-      while (heightRemaining > 1) {
+      // Halaman Selanjutnya (Gunakan toleransi 2mm untuk cegah blank page)
+      while (heightRemaining > 2) {
         position -= pdfHeight;
         pdf.addPage();
-        pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, canvasHeightMm);
+        pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
         heightRemaining -= pdfHeight;
       }
       
@@ -528,7 +536,7 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            <div className="mb-10 px-4 pdf-section" contentEditable suppressContentEditableWarning>
+            <div className="mb-10 px-4 pdf-section pdf-text-block" contentEditable suppressContentEditableWarning>
               <h3 className="font-bold text-lg border-l-8 border-blue-900 pl-4 mb-4 uppercase text-black">I. PENDAHULUAN</h3>
               <div className="space-y-4 text-base text-justify leading-relaxed text-black">
                 <p className="font-bold underline mb-1">1.1 Latar Belakang</p>
@@ -545,7 +553,7 @@ const App: React.FC = () => {
             </div>
 
             {config.reportMode === 'Lengkap' && (
-              <div className="mb-10 px-4 pdf-section" contentEditable suppressContentEditableWarning>
+              <div className="mb-10 px-4 pdf-section pdf-text-block" contentEditable suppressContentEditableWarning>
                 <h3 className="font-bold text-lg border-l-8 border-blue-900 pl-4 mb-4 uppercase text-black">II. PELAKSANAAN KEGIATAN</h3>
                 <div className="space-y-4 text-base text-justify leading-relaxed text-black">
                   <p className="font-bold underline mb-1">2.1 Waktu dan Tempat</p>
@@ -556,7 +564,6 @@ const App: React.FC = () => {
               </div>
             )}
 
-            {/* SEKSI LAPORAN KEUANGAN - Dipaksa mulai halaman baru */}
             <div className="mb-10 px-4 pdf-section keuangan-start">
               <h3 className="font-bold text-lg border-l-8 border-blue-900 pl-4 mb-6 uppercase text-black">
                 {config.reportMode === 'Cepat' ? 'II. LAPORAN KEUANGAN' : 'III. LAPORAN KEUANGAN'}
@@ -596,7 +603,7 @@ const App: React.FC = () => {
               </table>
             </div>
 
-            <div className="mb-12 px-4 pdf-section" contentEditable suppressContentEditableWarning>
+            <div className="mb-12 px-4 pdf-section pdf-text-block" contentEditable suppressContentEditableWarning>
               <h3 className="font-bold text-lg border-l-8 border-blue-900 pl-4 mb-4 uppercase text-black">
                 {config.reportMode === 'Cepat' ? 'III. PENUTUP' : 'IV. EVALUASI DAN PENUTUP'}
               </h3>
@@ -612,7 +619,7 @@ const App: React.FC = () => {
                     <p className="font-bold underline mt-4 mb-1">4.4 Penutup</p>
                   </>
                 )}
-                <p className="whitespace-pre-wrap">{config.conclusion || 'Belum diisi.'}</p>
+                <p className="whitespace-pre-wrap">{config.conclusion || 'Demikian laporan ini dibuat sebagai bentuk pertanggungjawaban atas kegiatan yang telah terlaksana.'}</p>
               </div>
             </div>
 
