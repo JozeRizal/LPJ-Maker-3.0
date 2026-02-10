@@ -10,7 +10,6 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>
-        // Shim untuk mencegah crash di produksi jika process.env diakses
         window.process = { env: { API_KEY: "" } };
     </script>
     <style>
@@ -21,7 +20,6 @@
             padding: 0;
         }
 
-        /* Tampilan Dokumen di Layar */
         .a4-preview {
             width: 210mm;
             min-height: 297mm;
@@ -33,9 +31,22 @@
             border-radius: 4px;
             overflow: visible;
             position: relative;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
 
-        /* Aturan Cetak */
+        /* Marker untuk elemen yang harus dihindari potongannya */
+        .pdf-section {
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+            transition: margin-top 0.2s;
+        }
+
+        .a4-preview h1, .a4-preview h2, .a4-preview h3, .a4-preview p {
+            line-height: 1.4 !important;
+            word-wrap: break-word;
+        }
+
         @media print {
             .no-print { display: none !important; }
             body { background: white; }
@@ -43,20 +54,8 @@
                 box-shadow: none;
                 margin: 0;
                 width: 100%;
+                padding: 10mm;
             }
-        }
-
-        /* Animasi Loading */
-        .loading-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(255, 255, 255, 0.8);
-            backdrop-filter: blur(4px);
-            z-index: 9999;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
         }
     </style>
 <script type="importmap">
