@@ -10,8 +10,17 @@ import { Transaction, TransactionType, ReportConfig, ReportMode } from './types'
 import { formatIDR, fileToBase64, generateId, toTitleCase } from './utils';
 import { generateReportNarrative, analyzeReceipt } from './services/geminiService';
 
-const STORAGE_KEY = 'lpj_master_v9';
-const API_KEY_STORAGE = 'user_manual_api_key';
+const STORAGE_KEY = 'lpj_master_v10';
+
+declare global {
+  interface AIStudio {
+    hasSelectedApiKey: () => Promise<boolean>;
+    openSelectKey: () => Promise<void>;
+  }
+  interface Window {
+    aistudio?: AIStudio;
+  }
+}
 
 const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -19,9 +28,7 @@ const App: React.FC = () => {
   const reportRef = useRef<HTMLDivElement>(null);
   
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [hasApiKey, setHasApiKey] = useState(false);
-  const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
-  const [manualKeyInput, setManualKeyInput] = useState('');
+  const [hasApiKey, setHasApiKey] = useState<boolean>(false);
   
   const [config, setConfig] = useState<ReportConfig>({
     reportMode: 'Lengkap',
@@ -77,11 +84,13 @@ const App: React.FC = () => {
         setConfig(prev => ({ ...prev, ...(parsed.config || {}) }));
       } catch (e) {}
     }
-    const storedKey = localStorage.getItem(API_KEY_STORAGE);
-    if (storedKey) {
-      setHasApiKey(true);
-      setManualKeyInput(storedKey);
-    }
+    const checkKey = async () => {
+      if (window.aistudio) {
+        const hasKey = await window.aistudio.hasSelectedApiKey();
+        setHasApiKey(hasKey);
+      }
+    };
+    checkKey();
     setHasLoaded(true);
   }, []);
 
@@ -89,38 +98,20 @@ const App: React.FC = () => {
     if (hasLoaded) localStorage.setItem(STORAGE_KEY, JSON.stringify({ config, transactions }));
   }, [config, transactions, hasLoaded]);
 
+  const handleOpenKeySelector = async () => {
+    if (window.aistudio) {
+      await window.aistudio.openSelectKey();
+      setHasApiKey(true);
+    }
+  };
+
   const handleResetData = () => {
-    if (confirm('Hapus seluruh data laporan ini dan mulai baru?')) {
+    if (confirm('Hapus seluruh data laporan ini?')) {
       setTransactions([]);
       setConfig({
-        reportMode: 'Lengkap',
-        reportTitle: 'LAPORAN PERTANGGUNGJAWABAN',
-        eventName: '',
-        organizationName: '',
-        reportDate: new Date().toISOString().split('T')[0],
-        location: '',
-        chairpersonName: '',
-        chairpersonTitle: 'Ketua Panitia',
-        treasurerName: '',
-        treasurerTitle: 'Bendahara',
-        official3Name: '',
-        official3Title: 'Sekretaris',
-        official4Name: '',
-        official4Title: 'Mengetahui',
-        background: '',
-        conclusion: '',
-        tujuan: '',
-        sasaran: '',
-        waktuTempat: '',
-        peserta: '',
-        mekanisme: '',
-        hasil: '',
-        hambatan: '',
-        saran: '',
-        logoBase64: ''
+        reportMode: 'Lengkap', reportTitle: 'LAPORAN PERTANGGUNGJAWABAN', eventName: '', organizationName: '', reportDate: new Date().toISOString().split('T')[0], location: '', chairpersonName: '', chairpersonTitle: 'Ketua Panitia', treasurerName: '', treasurerTitle: 'Bendahara', official3Name: '', official3Title: 'Sekretaris', official4Name: '', official4Title: 'Mengetahui', background: '', conclusion: '', tujuan: '', sasaran: '', waktuTempat: '', peserta: '', mekanisme: '', hasil: '', hambatan: '', saran: '', logoBase64: ''
       });
       localStorage.removeItem(STORAGE_KEY);
-      alert('Data berhasil di-reset.');
     }
   };
 
@@ -141,14 +132,12 @@ const App: React.FC = () => {
       const result = await analyzeReceipt(base64);
       if (result?.transactions) {
         const mapped = result.transactions.map((t: any, idx: number) => ({
-          ...t,
-          id: generateId(),
-          manualNo: (transactions.length + idx + 1).toString(),
-          receiptBase64: base64
+          ...t, id: generateId(), manualNo: (transactions.length + idx + 1).toString(), receiptBase64: base64
         }));
         setTransactions(prev => [...prev, ...mapped]);
       }
-    } catch (err) { alert("Gagal scan nota."); } finally { setIsScanningAI(false); }
+    } catch (err: any) { alert("Gagal scan nota."); } 
+    finally { setIsScanningAI(false); }
   };
 
   const handleDownloadPDF = async () => {
@@ -158,15 +147,13 @@ const App: React.FC = () => {
     
     try {
       window.scrollTo(0, 0);
-      await new Promise(r => setTimeout(r, 800));
+      await new Promise(r => setTimeout(r, 1200));
       
       const element = reportRef.current;
-      // KONTROL PRESISI TINGGI (96 DPI Standard)
-      const pageHeightPx = 1122; 
-      const topPagePadding = 60; // Margin atas ekstra di tiap halaman (permintaan user)
-      const bottomBuffer = 80;   // Zona aman deteksi potong
+      const pageHeightPx = 1122; // Standar A4 96DPI
+      const topPagePadding = 60; // Padding atas di halaman baru agar tidak terlalu mepet
 
-      // Bersihkan spacer lama
+      // Reset spacers
       element.querySelectorAll('.pdf-spacer').forEach(s => s.remove());
 
       const getAbsoluteTop = (el: HTMLElement) => {
@@ -176,79 +163,67 @@ const App: React.FC = () => {
       };
 
       const injectSpacer = (target: HTMLElement, h: number) => {
-        if (h <= 0) return;
+        if (h <= 5) return;
         const s = document.createElement('div');
         s.className = 'pdf-spacer';
         s.style.height = `${h}px`;
         s.style.width = '100%';
         s.style.display = 'block';
         s.style.clear = 'both';
+        s.style.visibility = 'hidden';
         target.parentNode?.insertBefore(s, target);
       };
 
       const injectTableSpacer = (targetTr: HTMLTableRowElement, h: number) => {
-        if (h <= 0) return;
+        if (h <= 5) return;
         const sTr = document.createElement('tr');
         sTr.className = 'pdf-spacer';
         const sTd = document.createElement('td');
         sTd.colSpan = 10;
         sTd.style.height = `${h}px`;
         sTd.style.border = 'none';
-        sTd.style.padding = '0';
         sTr.appendChild(sTd);
         targetTr.parentNode?.insertBefore(sTr, targetTr);
       };
 
-      // 1. HARD BREAK & TOP MARGIN FOR MAJOR SECTIONS
-      // Daftar seksi yang WAJIB mulai halaman baru + dapet margin atas
-      const hardBreakSections = ['.kop-section', '.keuangan-start', '.signature-start', '.lampiran-start'];
+      // 1. FORCE BREAK UNTUK SEKSI UTAMA (KEUANGAN, PENUTUP, LAMPIRAN)
+      // Selalu mulai di halaman baru jika posisi sekarang bukan di awal halaman.
+      const breakPoints = ['.keuangan-start', '.penutup-start', '.signature-start', '.lampiran-start'];
       
-      hardBreakSections.forEach(sel => {
+      breakPoints.forEach(sel => {
         const el = element.querySelector(sel) as HTMLElement;
         if (!el) return;
         
         const currentTop = getAbsoluteTop(el);
-        const pageIdx = Math.floor(currentTop / pageHeightPx);
-        const nextPageStart = (pageIdx + 1) * pageHeightPx;
-        
-        // Selalu dorong ke halaman baru kecuali jika sudah di paling atas halaman pertama
-        if (currentTop > 50) {
-            const gapToNextPage = nextPageStart - currentTop;
+        // Jika elemen tidak berada di baris pertama halaman (toleransi kecil 5px)
+        if (currentTop % pageHeightPx > 5) {
+            const pageIdx = Math.floor(currentTop / pageHeightPx);
+            const pageBottom = (pageIdx + 1) * pageHeightPx;
+            const gapToNextPage = pageBottom - currentTop;
             injectSpacer(el, gapToNextPage + topPagePadding);
         }
       });
 
-      // 2. PREVENT SLICING ON TABLE ROWS (TR)
-      const trs = Array.from(element.querySelectorAll('table tbody tr')) as HTMLTableRowElement[];
-      trs.forEach(tr => {
-        const top = getAbsoluteTop(tr);
-        const h = tr.offsetHeight;
+      // 2. ORPHAN PROTECTION (Mencegah sub-judul atau baris tabel terpotong di dasar halaman)
+      const subItems = Array.from(element.querySelectorAll('.pdf-text-block p.font-bold, table tbody tr, .receipt-card')) as HTMLElement[];
+      subItems.forEach(el => {
+        const top = getAbsoluteTop(el);
+        const h = el.offsetHeight;
         const pageIdx = Math.floor(top / pageHeightPx);
         const pageBottom = (pageIdx + 1) * pageHeightPx;
-
-        // Jika baris memotong garis halaman atau terlalu dekat margin bawah
-        if (top + h > pageBottom - bottomBuffer) {
+        
+        // Zona bahaya: jika sisa ruang kurang dari tinggi elemen + buffer 60px
+        if (top + h > pageBottom - 60) {
           const gapToNextPage = pageBottom - top;
-          injectTableSpacer(tr, gapToNextPage + topPagePadding);
+          if (el.tagName === 'TR') {
+            injectTableSpacer(el as HTMLTableRowElement, gapToNextPage + topPagePadding);
+          } else {
+            injectSpacer(el, gapToNextPage + topPagePadding);
+          }
         }
       });
 
-      // 3. PREVENT SLICING ON HEADINGS & TEXT BLOCKS
-      const blocks = Array.from(element.querySelectorAll('h3, .pdf-text-block, .receipt-card')) as HTMLElement[];
-      blocks.forEach(blk => {
-        const top = getAbsoluteTop(blk);
-        const h = blk.offsetHeight;
-        const pageIdx = Math.floor(top / pageHeightPx);
-        const pageBottom = (pageIdx + 1) * pageHeightPx;
-
-        if (top + h > pageBottom - bottomBuffer) {
-          const gapToNextPage = pageBottom - top;
-          injectSpacer(blk, gapToNextPage + topPagePadding);
-        }
-      });
-
-      // Tunggu render ulang layout setelah injeksi spacer
-      await new Promise(r => setTimeout(r, 1200));
+      await new Promise(r => setTimeout(r, 2200));
 
       const canvas = await html2canvas(element, {
         scale: 2,
@@ -256,17 +231,19 @@ const App: React.FC = () => {
         backgroundColor: "#ffffff",
         logging: false,
         scrollY: 0,
+        scrollX: 0,
+        x: 0,
+        y: 0,
         windowWidth: element.scrollWidth,
         windowHeight: element.scrollHeight,
       });
 
-      // Hapus spacer setelah capture agar tampilan web tidak berantakan
+      // Bersihkan spacer segera setelah capture
       element.querySelectorAll('.pdf-spacer').forEach(s => s.remove());
 
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = 210;
       const pdfHeight = 297;
-      
       const imgWidth = pdfWidth;
       const imgHeight = (canvas.height * imgWidth) / canvas.width;
       const imgData = canvas.toDataURL('image/jpeg', 0.98);
@@ -274,11 +251,9 @@ const App: React.FC = () => {
       let heightRemaining = imgHeight;
       let position = 0;
 
-      // Halaman Pertama
       pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
       heightRemaining -= pdfHeight;
 
-      // Halaman Selanjutnya (Gunakan toleransi 2mm untuk cegah blank page)
       while (heightRemaining > 2) {
         position -= pdfHeight;
         pdf.addPage();
@@ -287,25 +262,15 @@ const App: React.FC = () => {
       }
       
       pdf.save(`LPJ_${config.eventName || 'Laporan'}.pdf`);
-    } catch (err) { 
-      console.error(err);
-      alert("Gagal download PDF."); 
-    } finally { 
-      window.scrollTo(0, scrollY); 
-      setIsExporting(false); 
-    }
+    } catch (err) { alert("Gagal memproses PDF."); } 
+    finally { window.scrollTo(0, scrollY); setIsExporting(false); }
   };
 
   const addTransaction = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTx.description || !newTx.amount) return;
     setTransactions([...transactions, {
-      id: generateId(),
-      date: newTx.date,
-      description: toTitleCase(newTx.description),
-      type: newTx.type,
-      amount: Number(newTx.amount),
-      manualNo: (transactions.length + 1).toString()
+      id: generateId(), date: newTx.date, description: toTitleCase(newTx.description), type: newTx.type, amount: Number(newTx.amount), manualNo: (transactions.length + 1).toString()
     }]);
     setNewTx({ ...newTx, description: '', amount: '' });
   };
@@ -314,20 +279,8 @@ const App: React.FC = () => {
   const totalExpense = transactions.filter(t => t.type === 'Pengeluaran').reduce((s, t) => s + t.amount, 0);
   const balance = totalIncome - totalExpense;
 
-  const uniqueReceipts = Array.from(
-    new Map(
-      transactions
-        .filter(t => t.receiptBase64)
-        .map(t => [t.receiptBase64, t])
-    ).values()
-  );
-
-  const activeSigners = [
-    { name: config.chairpersonName, title: config.chairpersonTitle },
-    { name: config.treasurerName, title: config.treasurerTitle },
-    { name: config.official3Name, title: config.official3Title },
-    { name: config.official4Name, title: config.official4Title }
-  ].filter(s => s.name && s.name.trim() !== '');
+  const uniqueReceipts = Array.from(new Map(transactions.filter(t => t.receiptBase64).map(t => [t.receiptBase64, t])).values());
+  const activeSigners = [{ name: config.chairpersonName, title: config.chairpersonTitle }, { name: config.treasurerName, title: config.treasurerTitle }, { name: config.official3Name, title: config.official3Title }, { name: config.official4Name, title: config.official4Title }].filter(s => s.name && s.name.trim() !== '');
 
   const inputStyle = "w-full p-3 border-2 border-slate-200 rounded-xl bg-white focus:border-blue-500 outline-none transition-all text-sm";
   const labelStyle = "text-[10px] font-bold text-slate-400 mb-1 uppercase tracking-wider";
@@ -341,13 +294,13 @@ const App: React.FC = () => {
             <h1 className="text-xl font-black tracking-tight uppercase text-white">LPJ MASTER</h1>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => setIsKeyModalOpen(true)} className={`px-4 py-2 rounded-xl font-bold flex items-center gap-2 border text-[11px] ${hasApiKey ? 'border-emerald-500/50 text-emerald-400 bg-emerald-500/10' : 'border-amber-500/50 text-amber-400 bg-amber-500/10'}`}>
+            <button onClick={handleOpenKeySelector} className={`px-4 py-2 rounded-xl font-bold flex items-center gap-2 border text-[11px] transition-all ${hasApiKey ? 'border-emerald-500/50 text-emerald-400 bg-emerald-500/10' : 'border-amber-500/50 text-amber-400 bg-emerald-500/10 animate-pulse'}`}>
               <Key className="w-4 h-4" /> {hasApiKey ? 'KUNCI AKTIF' : 'ISI API KEY'}
             </button>
             <button onClick={handleDownloadPDF} disabled={isExporting} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg disabled:opacity-50 text-xs">
               {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} PDF
             </button>
-            <button onClick={handleResetData} className="bg-slate-800 hover:bg-red-600 p-2.5 rounded-xl border border-slate-700 shadow-lg active:scale-95 transition-all group" title="Hapus Semua Data">
+            <button onClick={handleResetData} className="bg-slate-800 hover:bg-red-600 p-2.5 rounded-xl border border-slate-700 shadow-lg active:scale-95 transition-all group">
               <RefreshCcw className="w-5 h-5 text-white group-hover:rotate-180 transition-transform duration-500" />
             </button>
           </div>
@@ -380,20 +333,19 @@ const App: React.FC = () => {
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-xl font-bold flex items-center gap-3 text-slate-800"><Lightbulb className="text-amber-500 w-6 h-6" /> 2. Narasi & Isi Laporan</h2>
                 <button onClick={async () => {
-                  if(!hasApiKey) { setIsKeyModalOpen(true); return; }
+                  if(!hasApiKey) { alert("API Key belum diset."); return; }
                   setIsGeneratingAI(true);
                   try {
                     const res = await generateReportNarrative({ config, transactions });
                     if (res) setConfig(prev => ({...prev, ...res}));
-                  } catch (e) { alert("AI Gagal memproses narasi."); } finally { setIsGeneratingAI(false); }
+                  } catch (e: any) { alert("AI Gagal memproses narasi."); } 
+                  finally { setIsGeneratingAI(false); }
                 }} className="bg-emerald-600 text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg hover:bg-emerald-700 transition-colors">
                   {isGeneratingAI ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} GENERATE AI
                 </button>
               </div>
-              
               <div className="space-y-6">
                 <div><label className={labelStyle}>I. Latar Belakang</label><textarea value={config.background} onChange={e => setConfig({...config, background: e.target.value})} className={`${inputStyle} h-32`} /></div>
-                
                 {config.reportMode === 'Lengkap' && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-l-4 border-emerald-100 pl-4">
                     <div><label className={labelStyle}>Tujuan Kegiatan</label><textarea value={config.tujuan} onChange={e => setConfig({...config, tujuan: e.target.value})} className={`${inputStyle} h-24`} /></div>
@@ -405,7 +357,6 @@ const App: React.FC = () => {
                     <div><label className={labelStyle}>Saran / Rekomendasi</label><textarea value={config.saran} onChange={e => setConfig({...config, saran: e.target.value})} className={`${inputStyle} h-24`} /></div>
                   </div>
                 )}
-                
                 <div><label className={labelStyle}>Kesimpulan & Penutup</label><textarea value={config.conclusion} onChange={e => setConfig({...config, conclusion: e.target.value})} className={`${inputStyle} h-24`} /></div>
               </div>
             </section>
@@ -413,75 +364,25 @@ const App: React.FC = () => {
             <section className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-xl font-bold flex items-center gap-3 text-slate-800"><PlusCircle className="text-blue-600 w-6 h-6" /> 3. Transaksi Keuangan</h2>
-                <button onClick={() => fileInputRef.current?.click()} className="bg-blue-50 text-blue-600 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border border-blue-200">
+                <button onClick={() => { if(!hasApiKey) { alert("API Key belum diset."); return; } fileInputRef.current?.click(); }} className="bg-blue-50 text-blue-600 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border border-blue-200">
                   {isScanningAI ? <Loader2 className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4"/>} SCAN NOTA (AI)
                 </button>
                 <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleScanReceipt} />
               </div>
-              
               <form onSubmit={addTransaction} className="grid grid-cols-1 md:grid-cols-12 gap-3 mb-8 bg-slate-50 p-5 rounded-2xl border-2 border-dashed border-slate-200">
-                <div className="md:col-span-2">
-                  <label className={labelStyle}>Tanggal</label>
-                  <input type="date" value={newTx.date} onChange={e => setNewTx({...newTx, date: e.target.value})} className={inputStyle} />
-                </div>
-                <div className="md:col-span-2">
-                  <label className={labelStyle}>Jenis</label>
-                  <select value={newTx.type} onChange={e => setNewTx({...newTx, type: e.target.value as TransactionType})} className={inputStyle}>
-                    <option value="Pengeluaran">Keluar (-)</option>
-                    <option value="Pemasukan">Masuk (+)</option>
-                  </select>
-                </div>
-                <div className="md:col-span-4">
-                  <label className={labelStyle}>Keterangan</label>
-                  <input type="text" placeholder="Contoh: Pembelian Konsumsi" value={newTx.description} onChange={e => setNewTx({...newTx, description: e.target.value})} className={inputStyle} />
-                </div>
-                <div className="md:col-span-3">
-                  <label className={labelStyle}>Nominal</label>
-                  <input type="number" placeholder="Rp" value={newTx.amount} onChange={e => setNewTx({...newTx, amount: e.target.value})} className={inputStyle} />
-                </div>
-                <div className="md:col-span-1 flex items-end">
-                  <button type="submit" className="w-full bg-slate-900 text-white rounded-xl font-bold py-3 shadow-lg hover:bg-black transition-all">+</button>
-                </div>
+                <div className="md:col-span-2"><label className={labelStyle}>Tanggal</label><input type="date" value={newTx.date} onChange={e => setNewTx({...newTx, date: e.target.value})} className={inputStyle} /></div>
+                <div className="md:col-span-2"><label className={labelStyle}>Jenis</label><select value={newTx.type} onChange={e => setNewTx({...newTx, type: e.target.value as TransactionType})} className={inputStyle}><option value="Pengeluaran">Keluar (-)</option><option value="Pemasukan">Masuk (+)</option></select></div>
+                <div className="md:col-span-4"><label className={labelStyle}>Keterangan</label><input type="text" placeholder="Contoh: Konsumsi" value={newTx.description} onChange={e => setNewTx({...newTx, description: e.target.value})} className={inputStyle} /></div>
+                <div className="md:col-span-3"><label className={labelStyle}>Nominal</label><input type="number" placeholder="Rp" value={newTx.amount} onChange={e => setNewTx({...newTx, amount: e.target.value})} className={inputStyle} /></div>
+                <div className="md:col-span-1 flex items-end"><button type="submit" className="w-full bg-slate-900 text-white rounded-xl font-bold py-3 shadow-lg hover:bg-black transition-all">+</button></div>
               </form>
-
               <div className="overflow-hidden border border-slate-100 rounded-2xl">
-                <table className="w-full text-sm text-left">
-                  <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px] tracking-widest border-b">
-                    <tr>
-                      <th className="p-4 w-12 text-center">No</th>
-                      <th className="p-4 w-28 text-center">Tanggal</th>
-                      <th className="p-4 w-28">Jenis</th>
-                      <th className="p-4">Deskripsi</th>
-                      <th className="p-4 text-right w-32">Nominal</th>
-                      <th className="p-4 w-10"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {transactions.map((t, idx) => (
-                      <tr key={t.id} className="hover:bg-slate-50 transition-all">
-                        <td className="p-4 text-center text-slate-400 font-mono text-xs">{idx + 1}</td>
-                        <td className="p-4 text-center text-slate-600 font-medium text-xs whitespace-nowrap">{t.date}</td>
-                        <td className="p-4">
-                          <span className={`px-2 py-1 rounded-md text-[10px] font-black ${t.type === 'Pemasukan' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
-                            {t.type.toUpperCase()}
-                          </span>
-                        </td>
-                        <td className="p-4 font-medium text-slate-700">{t.description}</td>
-                        <td className={`p-4 text-right font-mono font-bold ${t.type === 'Pemasukan' ? 'text-emerald-600' : 'text-slate-900'}`}>
-                          {t.type === 'Pemasukan' ? '+' : '-'}{formatIDR(t.amount)}
-                        </td>
-                        <td className="p-4">
-                          <button onClick={() => setTransactions(transactions.filter(x => x.id !== t.id))} className="text-slate-300 hover:text-red-500 transition-colors">
-                            <Trash2 className="w-4 h-4"/>
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                    {transactions.length === 0 && (
-                      <tr><td colSpan={6} className="p-10 text-center text-slate-400 italic">Belum ada data transaksi.</td></tr>
-                    )}
-                  </tbody>
-                </table>
+                <table className="w-full text-sm text-left"><thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px] tracking-widest border-b"><tr><th className="p-4 w-12 text-center">No</th><th className="p-4 w-28 text-center">Tanggal</th><th className="p-4 w-28">Jenis</th><th className="p-4">Deskripsi</th><th className="p-4 text-right w-32">Nominal</th><th className="p-4 w-10"></th></tr></thead><tbody className="divide-y divide-slate-100">
+                  {transactions.map((t, idx) => (
+                    <tr key={t.id} className="hover:bg-slate-50 transition-all"><td className="p-4 text-center text-slate-400 font-mono text-xs">{idx + 1}</td><td className="p-4 text-center text-slate-600 font-medium text-xs whitespace-nowrap">{t.date}</td><td className="p-4"><span className={`px-2 py-1 rounded-md text-[10px] font-black ${t.type === 'Pemasukan' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{t.type.toUpperCase()}</span></td><td className="p-4 font-medium text-slate-700">{t.description}</td><td className={`p-4 text-right font-mono font-bold ${t.type === 'Pemasukan' ? 'text-emerald-600' : 'text-slate-900'}`}>{t.type === 'Pemasukan' ? '+' : '-'}{formatIDR(t.amount)}</td><td className="p-4"><button onClick={() => setTransactions(transactions.filter(x => x.id !== t.id))} className="text-slate-300 hover:text-red-500 transition-colors"><Trash2 className="w-4 h-4"/></button></td></tr>
+                  ))}
+                  {transactions.length === 0 && (<tr><td colSpan={6} className="p-10 text-center text-slate-400 italic">Belum ada transaksi.</td></tr>)}
+                </tbody></table>
               </div>
             </section>
           </div>
@@ -492,11 +393,10 @@ const App: React.FC = () => {
               <div className="space-y-4">
                 <div><label className={labelStyle}>Ketua Panitia</label><input type="text" value={config.chairpersonName} onChange={e => setConfig({...config, chairpersonName: e.target.value})} className={inputStyle} /></div>
                 <div><label className={labelStyle}>Bendahara</label><input type="text" value={config.treasurerName} onChange={e => setConfig({...config, treasurerName: e.target.value})} className={inputStyle} /></div>
-                <div><label className={labelStyle}>Sekretaris (Opsional)</label><input type="text" value={config.official3Name} onChange={e => setConfig({...config, official3Name: e.target.value})} className={inputStyle} /></div>
-                <div><label className={labelStyle}>Mengetahui (Opsional)</label><input type="text" value={config.official4Name} onChange={e => setConfig({...config, official4Name: e.target.value})} className={inputStyle} /></div>
+                <div><label className={labelStyle}>Sekretaris</label><input type="text" value={config.official3Name} onChange={e => setConfig({...config, official3Name: e.target.value})} className={inputStyle} /></div>
+                <div><label className={labelStyle}>Mengetahui</label><input type="text" value={config.official4Name} onChange={e => setConfig({...config, official4Name: e.target.value})} className={inputStyle} /></div>
               </div>
             </section>
-            
             <div className="bg-blue-900 p-8 rounded-3xl text-white shadow-2xl">
                <p className="text-xs font-bold opacity-70 tracking-widest mb-1 uppercase">TOTAL SALDO AKHIR</p>
                <h3 className="text-3xl font-black">{formatIDR(balance)}</h3>
@@ -516,7 +416,7 @@ const App: React.FC = () => {
          
          <div ref={reportRef} className="a4-preview flex flex-col shadow-2xl bg-white !text-slate-900">
             {config.reportMode === 'Lengkap' && (
-              <div className="flex flex-col items-center justify-center text-center min-h-[900px] mb-20 border-b-2 border-slate-100 pb-20 pdf-section">
+              <div className="flex flex-col items-center justify-center text-center h-[1122px] mb-0 pb-20 pdf-section border-b-2 border-slate-100 overflow-hidden">
                  {config.logoBase64 && <img src={config.logoBase64} className="w-40 h-40 object-contain mb-12" alt="Logo" />}
                  <h1 className="text-3xl font-bold uppercase tracking-[0.2em] mb-4 text-black" contentEditable suppressContentEditableWarning>{config.reportTitle}</h1>
                  <h2 className="text-5xl font-black text-blue-900 mt-4 uppercase leading-tight max-w-2xl" contentEditable suppressContentEditableWarning>{config.eventName || '[NAMA KEGIATAN]'}</h2>
@@ -569,90 +469,50 @@ const App: React.FC = () => {
                 {config.reportMode === 'Cepat' ? 'II. LAPORAN KEUANGAN' : 'III. LAPORAN KEUANGAN'}
               </h3>
               <table className="w-full border-collapse border-2 border-black text-sm text-black">
-                <thead>
-                  <tr className="bg-slate-100">
-                    <th className="border-2 border-black p-3 text-center w-12 font-bold">No</th>
-                    <th className="border-2 border-black p-3 text-center w-28 font-bold">Tanggal</th>
-                    <th className="border-2 border-black p-3 text-left font-bold">Deskripsi Transaksi</th>
-                    <th className="border-2 border-black p-3 text-right font-bold w-32">Debit (Masuk)</th>
-                    <th className="border-2 border-black p-3 text-right font-bold w-32">Kredit (Keluar)</th>
-                  </tr>
-                </thead>
+                <thead><tr className="bg-slate-100"><th className="border-2 border-black p-3 text-center w-12 font-bold">No</th><th className="border-2 border-black p-3 text-center w-28 font-bold">Tanggal</th><th className="border-2 border-black p-3 text-left font-bold">Deskripsi</th><th className="border-2 border-black p-3 text-right font-bold w-32">Masuk</th><th className="border-2 border-black p-3 text-right font-bold w-32">Keluar</th></tr></thead>
                 <tbody contentEditable suppressContentEditableWarning>
                   {transactions.map((t, i) => (
-                    <tr key={t.id} className="pdf-tr">
-                      <td className="border border-black p-2.5 text-center">{i + 1}</td>
-                      <td className="border border-black p-2.5 text-center font-mono text-[10px] whitespace-nowrap">{t.date}</td>
-                      <td className="border border-black p-2.5 font-medium">{t.description}</td>
-                      <td className="border border-black p-2.5 text-right">{t.type === 'Pemasukan' ? formatIDR(t.amount) : '-'}</td>
-                      <td className="border border-black p-2.5 text-right">{t.type === 'Pengeluaran' ? formatIDR(t.amount) : '-'}</td>
-                    </tr>
+                    <tr key={t.id} className="pdf-tr"><td className="border border-black p-2 text-center">{i + 1}</td><td className="border border-black p-2 text-center font-mono text-[10px]">{t.date}</td><td className="border border-black p-2 font-medium">{t.description}</td><td className="border border-black p-2 text-right">{t.type === 'Pemasukan' ? formatIDR(t.amount) : '-'}</td><td className="border border-black p-2 text-right">{t.type === 'Pengeluaran' ? formatIDR(t.amount) : '-'}</td></tr>
                   ))}
                 </tbody>
-                <tfoot className="font-bold border-2 border-black">
-                  <tr className="bg-slate-100">
-                    <td colSpan={3} className="p-3 text-right uppercase tracking-widest text-xs">Total Per Kolom</td>
-                    <td className="p-3 text-right text-emerald-700">{formatIDR(totalIncome)}</td>
-                    <td className="p-3 text-right text-rose-700">{formatIDR(totalExpense)}</td>
-                  </tr>
-                  <tr className="bg-blue-900 text-white">
-                    <td colSpan={3} className="p-4 text-right uppercase tracking-widest text-sm text-white">Saldo Akhir Panitia</td>
-                    <td colSpan={2} className="p-4 text-center text-xl font-black text-white">{formatIDR(balance)}</td>
-                  </tr>
-                </tfoot>
+                <tfoot className="font-bold border-2 border-black"><tr className="bg-slate-100"><td colSpan={3} className="p-3 text-right text-xs">TOTAL</td><td className="p-3 text-right text-emerald-700">{formatIDR(totalIncome)}</td><td className="p-3 text-right text-rose-700">{formatIDR(totalExpense)}</td></tr><tr className="bg-blue-900 text-white"><td colSpan={3} className="p-4 text-right text-sm">SALDO AKHIR</td><td colSpan={2} className="p-4 text-center text-xl font-black">{formatIDR(balance)}</td></tr></tfoot>
               </table>
             </div>
 
-            <div className="mb-12 px-4 pdf-section pdf-text-block" contentEditable suppressContentEditableWarning>
-              <h3 className="font-bold text-lg border-l-8 border-blue-900 pl-4 mb-4 uppercase text-black">
+            <div className="mb-12 px-4 pdf-section pdf-text-block penutup-start" contentEditable suppressContentEditableWarning>
+              <h3 className="font-bold text-lg border-l-8 border-blue-900 pl-4 mb-4 uppercase text-black pt-10">
                 {config.reportMode === 'Cepat' ? 'III. PENUTUP' : 'IV. EVALUASI DAN PENUTUP'}
               </h3>
               <div className="space-y-4 text-base text-justify leading-relaxed text-black">
                 {config.reportMode === 'Lengkap' && (
                   <>
-                    <p className="font-bold underline mb-1">4.1 Hasil Kegiatan</p>
-                    <p className="whitespace-pre-wrap">{config.hasil || '-'}</p>
-                    <p className="font-bold underline mt-4 mb-1">4.2 Hambatan & Kendala</p>
-                    <p className="whitespace-pre-wrap">{config.hambatan || '-'}</p>
-                    <p className="font-bold underline mt-4 mb-1">4.3 Saran / Rekomendasi</p>
-                    <p className="whitespace-pre-wrap">{config.saran || '-'}</p>
+                    <p className="font-bold underline mb-1">4.1 Hasil Kegiatan</p><p className="whitespace-pre-wrap">{config.hasil || '-'}</p>
+                    <p className="font-bold underline mt-4 mb-1">4.2 Hambatan</p><p className="whitespace-pre-wrap">{config.hambatan || '-'}</p>
+                    <p className="font-bold underline mt-4 mb-1">4.3 Saran</p><p className="whitespace-pre-wrap">{config.saran || '-'}</p>
                     <p className="font-bold underline mt-4 mb-1">4.4 Penutup</p>
                   </>
                 )}
-                <p className="whitespace-pre-wrap">{config.conclusion || 'Demikian laporan ini dibuat sebagai bentuk pertanggungjawaban atas kegiatan yang telah terlaksana.'}</p>
+                <p className="whitespace-pre-wrap">{config.conclusion || 'Demikian laporan ini dibuat.'}</p>
               </div>
             </div>
 
             <div className="mt-auto pt-16 pb-12 px-4 pdf-section signature-start" contentEditable suppressContentEditableWarning>
               <p className="text-center font-bold text-sm uppercase mb-16 underline tracking-widest text-black">PENGESAHAN LAPORAN</p>
-              
               <div className={activeSigners.length === 1 ? 'flex justify-center' : 'grid grid-cols-2 text-center gap-y-16 gap-x-10'}>
                   {activeSigners.map((signer, idx) => (
-                    <div key={idx} className="flex flex-col text-center">
-                      <p className="text-xl font-bold mb-32 leading-tight h-10 min-w-[200px] text-black">
-                        {signer.title || 'Penandatangan'}
-                      </p>
-                      <p className="font-bold underline text-lg whitespace-nowrap text-black">
-                        {signer.name}
-                      </p>
-                    </div>
+                    <div key={idx} className="flex flex-col text-center"><p className="text-xl font-bold mb-32 leading-tight h-10 min-w-[200px] text-black">{signer.title || '...'}</p><p className="font-bold underline text-lg whitespace-nowrap text-black">{signer.name}</p></div>
                   ))}
-                  {activeSigners.length === 0 && (
-                    <div className="col-span-2 text-center text-slate-300 italic">Isi data penandatangan di panel samping</div>
-                  )}
               </div>
             </div>
 
             {uniqueReceipts.length > 0 && (
-              <div className="mt-16 pt-16 border-t-4 border-double border-slate-400 px-4 pdf-section lampiran-start">
-                <h3 className="text-center font-bold text-3xl mb-12 uppercase underline tracking-widest text-black">LAMPIRAN BUKTI TRANSAKSI</h3>
-                <div className="grid grid-cols-2 gap-10">
+              <div className="px-4 pdf-section lampiran-start border-t-4 border-double border-slate-400">
+                <h3 className="text-center font-bold text-4xl mb-12 uppercase underline tracking-[0.2em] text-black pt-16 mt-0">LAMPIRAN BUKTI TRANSAKSI</h3>
+                <div className="flex flex-wrap gap-x-10 gap-y-12 justify-center pb-20">
                   {uniqueReceipts.map((t, idx) => (
-                    <div key={idx} className="border-2 border-slate-100 p-5 rounded-3xl bg-white flex flex-col items-center shadow-sm receipt-card">
-                      <img src={t.receiptBase64!} className="max-h-[400px] object-contain mb-4 rounded-xl" alt="Nota" />
-                      <p className="text-[10px] text-slate-500 font-black uppercase text-center">
-                        Nota - Tanggal: {t.date}
-                      </p>
+                    <div key={idx} className="border-2 border-slate-200 p-6 rounded-[2.5rem] bg-white flex flex-col items-center shadow-sm receipt-card w-[45%] min-h-[400px]">
+                      <div className="flex-1 flex items-center justify-center w-full mb-6 overflow-hidden"><img src={t.receiptBase64!} className="max-w-full max-h-[450px] object-contain rounded-2xl" alt="Nota" /></div>
+                      <p className="text-xs text-slate-500 font-black uppercase text-center tracking-tighter border-t pt-4 w-full">NOTA - {t.date}</p>
                     </div>
                   ))}
                 </div>
@@ -660,38 +520,6 @@ const App: React.FC = () => {
             )}
          </div>
       </div>
-
-      {isKeyModalOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm no-print">
-          <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border border-slate-200">
-            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h3 className="font-black text-slate-800 flex items-center gap-2 uppercase tracking-tighter">PENGATURAN API KEY</h3>
-              <button onClick={() => setIsKeyModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-6 h-6"/></button>
-            </div>
-            <div className="p-8 space-y-4">
-              <input 
-                type="password" 
-                value={manualKeyInput} 
-                onChange={(e) => setManualKeyInput(e.target.value)} 
-                placeholder="Paste Gemini API Key Anda..." 
-                className={inputStyle} 
-              />
-              <button 
-                onClick={() => {
-                  if(!manualKeyInput.trim()) { alert("Input tidak boleh kosong!"); return; }
-                  localStorage.setItem(API_KEY_STORAGE, manualKeyInput.trim());
-                  setHasApiKey(true);
-                  setIsKeyModalOpen(false);
-                  alert("API Key berhasil disimpan!");
-                }} 
-                className="w-full px-6 py-4 rounded-2xl font-black text-white bg-blue-600 hover:bg-blue-700 shadow-lg active:scale-95 transition-all flex items-center justify-center gap-3 uppercase"
-              >
-                <Lock className="w-5 h-5" /> SIMPAN KUNCI
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
