@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Plus, Trash2, PlusCircle, Loader2, Sparkles, RefreshCcw, Camera, Layers, 
-  Download, FileText, Key, X, Keyboard, FileDown, Users, Lock, Target, Clock, MapPin, Lightbulb
+  Download, FileText, Key, X, Keyboard, FileDown, Users, Lock, Target, Clock, MapPin, Lightbulb, Save, ShieldCheck
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -11,16 +11,7 @@ import { formatIDR, fileToBase64, generateId, toTitleCase } from './utils';
 import { generateReportNarrative, analyzeReceipt } from './services/geminiService';
 
 const STORAGE_KEY = 'lpj_master_v10';
-
-declare global {
-  interface AIStudio {
-    hasSelectedApiKey: () => Promise<boolean>;
-    openSelectKey: () => Promise<void>;
-  }
-  interface Window {
-    aistudio?: AIStudio;
-  }
-}
+const API_KEY_STORAGE = 'user_manual_api_key';
 
 const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -29,6 +20,8 @@ const App: React.FC = () => {
   
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [hasApiKey, setHasApiKey] = useState<boolean>(false);
+  const [showKeyModal, setShowKeyModal] = useState<boolean>(false);
+  const [tempApiKey, setTempApiKey] = useState<string>('');
   
   const [config, setConfig] = useState<ReportConfig>({
     reportMode: 'Lengkap',
@@ -84,13 +77,13 @@ const App: React.FC = () => {
         setConfig(prev => ({ ...prev, ...(parsed.config || {}) }));
       } catch (e) {}
     }
-    const checkKey = async () => {
-      if (window.aistudio) {
-        const hasKey = await window.aistudio.hasSelectedApiKey();
-        setHasApiKey(hasKey);
-      }
-    };
-    checkKey();
+    
+    const key = localStorage.getItem(API_KEY_STORAGE);
+    if (key && key.trim() !== '') {
+      setHasApiKey(true);
+      setTempApiKey(key);
+    }
+    
     setHasLoaded(true);
   }, []);
 
@@ -98,11 +91,22 @@ const App: React.FC = () => {
     if (hasLoaded) localStorage.setItem(STORAGE_KEY, JSON.stringify({ config, transactions }));
   }, [config, transactions, hasLoaded]);
 
-  const handleOpenKeySelector = async () => {
-    if (window.aistudio) {
-      await window.aistudio.openSelectKey();
-      setHasApiKey(true);
+  const handleSaveKey = () => {
+    if (tempApiKey.trim() === '') {
+      alert("Silakan masukkan API Key Gemini Anda.");
+      return;
     }
+    localStorage.setItem(API_KEY_STORAGE, tempApiKey.trim());
+    setHasApiKey(true);
+    setShowKeyModal(false);
+    alert("API Key berhasil disimpan.");
+  };
+
+  const handleRemoveKey = () => {
+    localStorage.removeItem(API_KEY_STORAGE);
+    setHasApiKey(false);
+    setTempApiKey('');
+    alert("API Key dihapus.");
   };
 
   const handleResetData = () => {
@@ -136,7 +140,7 @@ const App: React.FC = () => {
         }));
         setTransactions(prev => [...prev, ...mapped]);
       }
-    } catch (err: any) { alert("Gagal scan nota."); } 
+    } catch (err: any) { alert("Gagal scan nota. Pastikan API Key valid."); } 
     finally { setIsScanningAI(false); }
   };
 
@@ -150,10 +154,9 @@ const App: React.FC = () => {
       await new Promise(r => setTimeout(r, 1200));
       
       const element = reportRef.current;
-      const pageHeightPx = 1122; // Standar A4 96DPI
-      const topPagePadding = 60; // Padding atas di halaman baru agar tidak terlalu mepet
+      const pageHeightPx = 1122; 
+      const topPagePadding = 60; 
 
-      // Reset spacers
       element.querySelectorAll('.pdf-spacer').forEach(s => s.remove());
 
       const getAbsoluteTop = (el: HTMLElement) => {
@@ -186,16 +189,11 @@ const App: React.FC = () => {
         targetTr.parentNode?.insertBefore(sTr, targetTr);
       };
 
-      // 1. FORCE BREAK UNTUK SEKSI UTAMA (KEUANGAN, PENUTUP, LAMPIRAN)
-      // Selalu mulai di halaman baru jika posisi sekarang bukan di awal halaman.
       const breakPoints = ['.keuangan-start', '.penutup-start', '.signature-start', '.lampiran-start'];
-      
       breakPoints.forEach(sel => {
         const el = element.querySelector(sel) as HTMLElement;
         if (!el) return;
-        
         const currentTop = getAbsoluteTop(el);
-        // Jika elemen tidak berada di baris pertama halaman (toleransi kecil 5px)
         if (currentTop % pageHeightPx > 5) {
             const pageIdx = Math.floor(currentTop / pageHeightPx);
             const pageBottom = (pageIdx + 1) * pageHeightPx;
@@ -204,15 +202,12 @@ const App: React.FC = () => {
         }
       });
 
-      // 2. ORPHAN PROTECTION (Mencegah sub-judul atau baris tabel terpotong di dasar halaman)
       const subItems = Array.from(element.querySelectorAll('.pdf-text-block p.font-bold, table tbody tr, .receipt-card')) as HTMLElement[];
       subItems.forEach(el => {
         const top = getAbsoluteTop(el);
         const h = el.offsetHeight;
         const pageIdx = Math.floor(top / pageHeightPx);
         const pageBottom = (pageIdx + 1) * pageHeightPx;
-        
-        // Zona bahaya: jika sisa ruang kurang dari tinggi elemen + buffer 60px
         if (top + h > pageBottom - 60) {
           const gapToNextPage = pageBottom - top;
           if (el.tagName === 'TR') {
@@ -238,7 +233,6 @@ const App: React.FC = () => {
         windowHeight: element.scrollHeight,
       });
 
-      // Bersihkan spacer segera setelah capture
       element.querySelectorAll('.pdf-spacer').forEach(s => s.remove());
 
       const pdf = new jsPDF('p', 'mm', 'a4');
@@ -287,6 +281,53 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#f1f5f9] text-slate-900 pb-20">
+      {/* Modal API Key */}
+      {showKeyModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-in fade-in duration-300">
+          <div className="bg-white rounded-[2rem] w-full max-w-md overflow-hidden shadow-2xl">
+            <div className="bg-slate-900 p-8 text-white relative">
+              <button onClick={() => setShowKeyModal(false)} className="absolute top-6 right-6 text-slate-400 hover:text-white transition-colors">
+                <X className="w-6 h-6" />
+              </button>
+              <div className="bg-blue-600 w-12 h-12 rounded-2xl flex items-center justify-center mb-6">
+                <Key className="w-6 h-6 text-white" />
+              </div>
+              <h3 className="text-2xl font-black mb-2 uppercase tracking-tight">Set Gemini API Key</h3>
+              <p className="text-slate-400 text-xs leading-relaxed">Masukkan API Key Gemini Anda untuk mengaktifkan fitur scan nota dan generate narasi otomatis oleh AI.</p>
+            </div>
+            <div className="p-8 space-y-6">
+              <div>
+                <label className={labelStyle}>API Key (Sk-xxxx...)</label>
+                <input 
+                  type="password" 
+                  placeholder="Paste API Key di sini" 
+                  value={tempApiKey}
+                  onChange={(e) => setTempApiKey(e.target.value)}
+                  className={inputStyle} 
+                />
+                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 font-bold mt-2 block hover:underline">Dapatkan Kunci di Google AI Studio →</a>
+              </div>
+              <div className="flex flex-col gap-3">
+                <button 
+                  onClick={handleSaveKey}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
+                >
+                  <Save className="w-4 h-4" /> SIMPAN KUNCI
+                </button>
+                {hasApiKey && (
+                  <button 
+                    onClick={handleRemoveKey}
+                    className="w-full bg-slate-100 hover:bg-red-50 text-slate-600 hover:text-red-600 font-bold py-3.5 rounded-xl transition-all flex items-center justify-center gap-2"
+                  >
+                    <Trash2 className="w-4 h-4" /> HAPUS KUNCI
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <nav className="bg-slate-900 text-white p-4 shadow-xl sticky top-0 z-50 no-print">
         <div className="container mx-auto flex justify-between items-center max-w-6xl">
           <div className="flex items-center gap-3">
@@ -294,7 +335,10 @@ const App: React.FC = () => {
             <h1 className="text-xl font-black tracking-tight uppercase text-white">LPJ MASTER</h1>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={handleOpenKeySelector} className={`px-4 py-2 rounded-xl font-bold flex items-center gap-2 border text-[11px] transition-all ${hasApiKey ? 'border-emerald-500/50 text-emerald-400 bg-emerald-500/10' : 'border-amber-500/50 text-amber-400 bg-emerald-500/10 animate-pulse'}`}>
+            <button 
+              onClick={() => setShowKeyModal(true)} 
+              className={`px-4 py-2 rounded-xl font-bold flex items-center gap-2 border text-[11px] transition-all ${hasApiKey ? 'border-emerald-500/50 text-emerald-400 bg-emerald-500/10' : 'border-amber-500/50 text-amber-400 bg-amber-500/10 animate-pulse'}`}
+            >
               <Key className="w-4 h-4" /> {hasApiKey ? 'KUNCI AKTIF' : 'ISI API KEY'}
             </button>
             <button onClick={handleDownloadPDF} disabled={isExporting} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg disabled:opacity-50 text-xs">
@@ -333,7 +377,7 @@ const App: React.FC = () => {
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-xl font-bold flex items-center gap-3 text-slate-800"><Lightbulb className="text-amber-500 w-6 h-6" /> 2. Narasi & Isi Laporan</h2>
                 <button onClick={async () => {
-                  if(!hasApiKey) { alert("API Key belum diset."); return; }
+                  if(!hasApiKey) { setShowKeyModal(true); return; }
                   setIsGeneratingAI(true);
                   try {
                     const res = await generateReportNarrative({ config, transactions });
@@ -364,7 +408,7 @@ const App: React.FC = () => {
             <section className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-xl font-bold flex items-center gap-3 text-slate-800"><PlusCircle className="text-blue-600 w-6 h-6" /> 3. Transaksi Keuangan</h2>
-                <button onClick={() => { if(!hasApiKey) { alert("API Key belum diset."); return; } fileInputRef.current?.click(); }} className="bg-blue-50 text-blue-600 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border border-blue-200">
+                <button onClick={() => { if(!hasApiKey) { setShowKeyModal(true); return; } fileInputRef.current?.click(); }} className="bg-blue-50 text-blue-600 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border border-blue-200">
                   {isScanningAI ? <Loader2 className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4"/>} SCAN NOTA (AI)
                 </button>
                 <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleScanReceipt} />
