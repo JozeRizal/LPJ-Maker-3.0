@@ -159,52 +159,93 @@ const App: React.FC = () => {
     
     try {
       window.scrollTo(0, 0);
-      await new Promise(r => setTimeout(r, 800));
+      await new Promise(r => setTimeout(r, 600));
       
       const element = reportRef.current;
-      const mmToPx = 3.7795275591;
-      const pageHeightPx = 297 * mmToPx; 
+      // Nilai pixel A4 standard 96 DPI
+      const pageHeightPx = 1122.5; 
+      const footerBuffer = 50; 
 
-      // Reset margin sebelumnya
-      const sections = element.querySelectorAll('.pdf-section');
-      sections.forEach((sec: any) => sec.style.marginTop = '0px');
+      element.querySelectorAll('.pdf-spacer').forEach(s => s.remove());
 
-      // 1. Logika Halaman Baru Lampiran yang Presisi (Tanpa Spasi Kosong Lebar)
-      const lampiranSection = element.querySelector('.lampiran-start');
-      if (lampiranSection) {
-        const rect = lampiranSection.getBoundingClientRect();
-        const containerRect = element.getBoundingClientRect();
-        const relativeTop = rect.top - containerRect.top;
-        const pageIndex = Math.floor(relativeTop / pageHeightPx);
-        const nextPageStart = (pageIndex + 1) * pageHeightPx;
-        const pushAmount = nextPageStart - relativeTop;
-        
-        // Hanya push jika sisa halaman cukup besar untuk dianggap 'menggantung'
-        if (pushAmount > 20) {
-           (lampiranSection as HTMLElement).style.marginTop = `${pushAmount}px`;
+      const getElementTop = (el: HTMLElement) => {
+        let top = 0;
+        let curr: HTMLElement | null = el;
+        while (curr && curr !== element) {
+          top += curr.offsetTop;
+          curr = curr.offsetParent as HTMLElement;
         }
-      }
+        return top;
+      };
 
-      // 2. Logika Pagination Pintar (Memberi Jarak antar Halaman agar tidak rapat)
-      sections.forEach((sec: any) => {
-        if (sec.classList.contains('lampiran-start')) return;
-        
-        const rect = sec.getBoundingClientRect();
-        const containerRect = element.getBoundingClientRect();
-        const relativeTop = rect.top - containerRect.top;
-        const relativeBottom = relativeTop + rect.height;
-        
-        const pageIndex = Math.floor(relativeTop / pageHeightPx);
-        const pageBottom = (pageIndex + 1) * pageHeightPx;
-        
-        // Jika elemen melewati garis potong halaman, pindahkan seluruhnya ke halaman baru
-        if (relativeBottom > pageBottom - 50 && relativeTop < pageBottom) {
-          const pushAmount = pageBottom - relativeTop;
-          sec.style.marginTop = `${pushAmount + 10}px`; 
+      const injectSpacer = (el: HTMLElement, height: number) => {
+        if (height <= 0) return;
+        const spacer = document.createElement('div');
+        spacer.className = 'pdf-spacer';
+        spacer.style.height = `${height}px`;
+        spacer.style.width = '100%';
+        spacer.style.backgroundColor = 'transparent';
+        el.parentNode?.insertBefore(spacer, el);
+      };
+
+      const injectTableSpacer = (tr: HTMLTableRowElement, height: number) => {
+        if (height <= 0) return;
+        const spacerTr = document.createElement('tr');
+        spacerTr.className = 'pdf-spacer';
+        const spacerTd = document.createElement('td');
+        spacerTd.colSpan = 10;
+        spacerTd.style.height = `${height}px`;
+        spacerTd.style.border = 'none';
+        spacerTd.style.padding = '0';
+        spacerTr.appendChild(spacerTd);
+        tr.parentNode?.insertBefore(spacerTr, tr);
+      };
+
+      // 1. FORCE NEW PAGE UNTUK BAGIAN KRUSIAL
+      // Menambahkan '.keuangan-start' agar tabel keuangan selalu di halaman baru
+      const hardBreakTargets = ['.kop-section', '.keuangan-start', '.signature-start', '.lampiran-start'];
+      hardBreakTargets.forEach(sel => {
+        const el = element.querySelector(sel) as HTMLElement;
+        if (!el) return;
+        const top = getElementTop(el);
+        const pageIdx = Math.floor(top / pageHeightPx);
+        const nextPageTop = (pageIdx + 1) * pageHeightPx;
+        const diff = nextPageTop - top;
+        // Hanya injeksi jika diff cukup besar (berarti elemen tidak di paling atas halaman)
+        if (diff > 10) {
+           injectSpacer(el, diff);
         }
       });
 
-      await new Promise(r => setTimeout(r, 1200));
+      // 2. PROTEKSI BARIS TABEL (TR) - Agar tidak terpotong horizontal
+      const trs = Array.from(element.querySelectorAll('table tbody tr')) as HTMLTableRowElement[];
+      trs.forEach(tr => {
+        const top = getElementTop(tr);
+        const height = tr.offsetHeight;
+        const pageIdx = Math.floor(top / pageHeightPx);
+        const pageBottom = (pageIdx + 1) * pageHeightPx;
+
+        if (top + height > pageBottom - footerBuffer) {
+          const diff = pageBottom - top;
+          injectTableSpacer(tr, diff + 1); // Tambah 1px toleransi
+        }
+      });
+
+      // 3. PROTEKSI NOTA LAMPIRAN
+      const cards = Array.from(element.querySelectorAll('.receipt-card')) as HTMLElement[];
+      cards.forEach(card => {
+        const top = getElementTop(card);
+        const height = card.offsetHeight;
+        const pageIdx = Math.floor(top / pageHeightPx);
+        const pageBottom = (pageIdx + 1) * pageHeightPx;
+
+        if (top + height > pageBottom - footerBuffer) {
+          const diff = pageBottom - top;
+          injectSpacer(card, diff + 5);
+        }
+      });
+
+      await new Promise(r => setTimeout(r, 1500));
 
       const canvas = await html2canvas(element, {
         scale: 2, 
@@ -216,8 +257,7 @@ const App: React.FC = () => {
         windowHeight: element.scrollHeight
       });
 
-      // Kembalikan ke layout awal editor
-      sections.forEach((sec: any) => sec.style.marginTop = '0px');
+      element.querySelectorAll('.pdf-spacer').forEach(s => s.remove());
 
       const imgData = canvas.toDataURL('image/jpeg', 0.95);
       const pdf = new jsPDF('p', 'mm', 'a4');
@@ -228,11 +268,9 @@ const App: React.FC = () => {
       let heightRemaining = canvasHeightMm;
       let position = 0;
 
-      // Render halaman pertama
       pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, canvasHeightMm);
       heightRemaining -= pdfHeight;
 
-      // Render halaman selanjutnya
       while (heightRemaining > 1) {
         position -= pdfHeight;
         pdf.addPage();
@@ -480,7 +518,7 @@ const App: React.FC = () => {
               </div>
             )}
 
-            <div className="border-b-4 border-double border-black pb-8 mb-12 flex items-center gap-6 pdf-section">
+            <div className="border-b-4 border-double border-black pb-8 mb-12 flex items-center gap-6 pdf-section kop-section">
               {config.logoBase64 && <img src={config.logoBase64} className="w-24 h-24 object-contain" alt="Kop" />}
               <div className={`flex-1 ${config.logoBase64 ? 'text-left' : 'text-center'}`}>
                 <h1 className="text-xl font-bold uppercase underline tracking-wider text-black" contentEditable suppressContentEditableWarning>{config.reportTitle}</h1>
@@ -518,7 +556,8 @@ const App: React.FC = () => {
               </div>
             )}
 
-            <div className="mb-10 px-4 pdf-section">
+            {/* SEKSI LAPORAN KEUANGAN - Dipaksa mulai halaman baru */}
+            <div className="mb-10 px-4 pdf-section keuangan-start">
               <h3 className="font-bold text-lg border-l-8 border-blue-900 pl-4 mb-6 uppercase text-black">
                 {config.reportMode === 'Cepat' ? 'II. LAPORAN KEUANGAN' : 'III. LAPORAN KEUANGAN'}
               </h3>
@@ -534,7 +573,7 @@ const App: React.FC = () => {
                 </thead>
                 <tbody contentEditable suppressContentEditableWarning>
                   {transactions.map((t, i) => (
-                    <tr key={t.id}>
+                    <tr key={t.id} className="pdf-tr">
                       <td className="border border-black p-2.5 text-center">{i + 1}</td>
                       <td className="border border-black p-2.5 text-center font-mono text-[10px] whitespace-nowrap">{t.date}</td>
                       <td className="border border-black p-2.5 font-medium">{t.description}</td>
@@ -577,17 +616,15 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            <div className="mt-auto pt-16 pb-12 px-4 pdf-section" contentEditable suppressContentEditableWarning>
+            <div className="mt-auto pt-16 pb-12 px-4 pdf-section signature-start" contentEditable suppressContentEditableWarning>
               <p className="text-center font-bold text-sm uppercase mb-16 underline tracking-widest text-black">PENGESAHAN LAPORAN</p>
               
               <div className={activeSigners.length === 1 ? 'flex justify-center' : 'grid grid-cols-2 text-center gap-y-16 gap-x-10'}>
                   {activeSigners.map((signer, idx) => (
                     <div key={idx} className="flex flex-col text-center">
-                      {/* JABATAN XL SESUAI INSTRUKSI */}
                       <p className="text-xl font-bold mb-32 leading-tight h-10 min-w-[200px] text-black">
                         {signer.title || 'Penandatangan'}
                       </p>
-                      {/* NAMA DIKECILKAN KE 'LG' SESUAI INSTRUKSI */}
                       <p className="font-bold underline text-lg whitespace-nowrap text-black">
                         {signer.name}
                       </p>
@@ -604,7 +641,7 @@ const App: React.FC = () => {
                 <h3 className="text-center font-bold text-3xl mb-12 uppercase underline tracking-widest text-black">LAMPIRAN BUKTI TRANSAKSI</h3>
                 <div className="grid grid-cols-2 gap-10">
                   {uniqueReceipts.map((t, idx) => (
-                    <div key={idx} className="border-2 border-slate-100 p-5 rounded-3xl bg-white flex flex-col items-center shadow-sm pdf-section">
+                    <div key={idx} className="border-2 border-slate-100 p-5 rounded-3xl bg-white flex flex-col items-center shadow-sm receipt-card">
                       <img src={t.receiptBase64!} className="max-h-[400px] object-contain mb-4 rounded-xl" alt="Nota" />
                       <p className="text-[10px] text-slate-500 font-black uppercase text-center">
                         Nota - Tanggal: {t.date}
