@@ -1,12 +1,11 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Plus, Trash2, PlusCircle, Loader2, Sparkles, RefreshCcw, Camera, Layers, 
-  Download, FileText, Key, X, Keyboard, FileDown, Users, Lock, Target, Clock, MapPin, Lightbulb, Save, ShieldCheck
+  Download, FileText, Key, X, Keyboard, Users, Lightbulb, Save
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
-import { Transaction, TransactionType, ReportConfig, ReportMode } from './types';
+import { Transaction, TransactionType, ReportConfig } from './types';
 import { formatIDR, fileToBase64, generateId, toTitleCase } from './utils';
 import { generateReportNarrative, analyzeReceipt } from './services/geminiService';
 
@@ -151,11 +150,19 @@ const App: React.FC = () => {
     
     try {
       window.scrollTo(0, 0);
-      await new Promise(r => setTimeout(r, 1200));
+      await new Promise(r => setTimeout(r, 800));
       
       const element = reportRef.current;
-      const pageHeightPx = 1122; 
-      const topPagePadding = 60; 
+      
+      const pdfWidth = 210;
+      const pdfHeight = 297;
+      const marginTop = 15;
+      const marginBottom = 15;
+      const usableHeightMm = pdfHeight - marginTop - marginBottom; 
+
+      const A4_WIDTH_PX = 800; 
+      const PX_PER_MM = A4_WIDTH_PX / pdfWidth;
+      const USABLE_HEIGHT_PX = usableHeightMm * PX_PER_MM; // ~1017px
 
       element.querySelectorAll('.pdf-spacer').forEach(s => s.remove());
 
@@ -166,21 +173,20 @@ const App: React.FC = () => {
       };
 
       const injectSpacer = (target: HTMLElement, h: number) => {
-        if (h <= 5) return;
+        if (h <= 1) return;
         const s = document.createElement('div');
         s.className = 'pdf-spacer';
         s.style.height = `${h}px`;
         s.style.width = '100%';
         s.style.display = 'block';
         s.style.clear = 'both';
-        s.style.visibility = 'hidden';
         target.parentNode?.insertBefore(s, target);
       };
 
       const injectTableSpacer = (targetTr: HTMLTableRowElement, h: number) => {
-        if (h <= 5) return;
+        if (h <= 1) return;
         const sTr = document.createElement('tr');
-        sTr.className = 'pdf-spacer';
+        sTr.className = 'pdf-spacer bg-white';
         const sTd = document.createElement('td');
         sTd.colSpan = 10;
         sTd.style.height = `${h}px`;
@@ -189,75 +195,87 @@ const App: React.FC = () => {
         targetTr.parentNode?.insertBefore(sTr, targetTr);
       };
 
-      const breakPoints = ['.keuangan-start', '.penutup-start', '.signature-start', '.lampiran-start'];
-      breakPoints.forEach(sel => {
-        const el = element.querySelector(sel) as HTMLElement;
-        if (!el) return;
-        const currentTop = getAbsoluteTop(el);
-        if (currentTop % pageHeightPx > 5) {
-            const pageIdx = Math.floor(currentTop / pageHeightPx);
-            const pageBottom = (pageIdx + 1) * pageHeightPx;
-            const gapToNextPage = pageBottom - currentTop;
-            injectSpacer(el, gapToNextPage + topPagePadding);
-        }
-      });
+      const elements = Array.from(element.querySelectorAll('.kop-section, .keuangan-start, .penutup-start, .signature-start, .lampiran-start, .pdf-text-block h3, .pdf-text-block p, table tbody tr, .receipt-card')) as HTMLElement[];
 
-      const subItems = Array.from(element.querySelectorAll('.pdf-text-block p.font-bold, table tbody tr, .receipt-card')) as HTMLElement[];
-      subItems.forEach(el => {
+      for (const el of elements) {
         const top = getAbsoluteTop(el);
         const h = el.offsetHeight;
-        const pageIdx = Math.floor(top / pageHeightPx);
-        const pageBottom = (pageIdx + 1) * pageHeightPx;
-        if (top + h > pageBottom - 60) {
-          const gapToNextPage = pageBottom - top;
-          if (el.tagName === 'TR') {
-            injectTableSpacer(el as HTMLTableRowElement, gapToNextPage + topPagePadding);
-          } else {
-            injectSpacer(el, gapToNextPage + topPagePadding);
+        const bottom = top + h;
+        
+        let offsetInPage = Math.floor(top) % USABLE_HEIGHT_PX;
+        if (offsetInPage > USABLE_HEIGHT_PX - 10) {
+            offsetInPage = 0;
+        }
+
+        const pageIndex = Math.floor(top / USABLE_HEIGHT_PX);
+        const pageBottom = (pageIndex + 1) * USABLE_HEIGHT_PX;
+
+        if (el.matches('.kop-section, .keuangan-start, .penutup-start, .signature-start, .lampiran-start')) {
+          if (offsetInPage > 150) { 
+              const gap = USABLE_HEIGHT_PX - offsetInPage;
+              injectSpacer(el, gap);
+              continue; 
           }
         }
-      });
 
-      await new Promise(r => setTimeout(r, 2200));
+        if (bottom > pageBottom - 25 && h < USABLE_HEIGHT_PX) {
+          const gap = USABLE_HEIGHT_PX - offsetInPage;
+          if (el.tagName === 'TR') {
+              injectTableSpacer(el as HTMLTableRowElement, gap);
+          } else {
+              injectSpacer(el, gap);
+          }
+        }
+      }
+
+      await new Promise(r => setTimeout(r, 1500)); 
 
       const canvas = await html2canvas(element, {
-        scale: 2,
+        scale: 2, 
         useCORS: true,
         backgroundColor: "#ffffff",
-        logging: false,
-        scrollY: 0,
-        scrollX: 0,
-        x: 0,
-        y: 0,
-        windowWidth: element.scrollWidth,
-        windowHeight: element.scrollHeight,
+        width: A4_WIDTH_PX, 
+        windowWidth: A4_WIDTH_PX,
       });
 
       element.querySelectorAll('.pdf-spacer').forEach(s => s.remove());
 
       const pdf = new jsPDF('p', 'mm', 'a4');
-      const pdfWidth = 210;
-      const pdfHeight = 297;
       const imgWidth = pdfWidth;
       const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      
       const imgData = canvas.toDataURL('image/jpeg', 0.98);
 
       let heightRemaining = imgHeight;
-      let position = 0;
+      let position = marginTop;
 
+      // Halaman Pertama
       pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
-      heightRemaining -= pdfHeight;
+      pdf.setFillColor(255, 255, 255);
+      pdf.rect(0, pdfHeight - marginBottom, pdfWidth, marginBottom, 'F'); 
+      heightRemaining -= usableHeightMm;
 
-      while (heightRemaining > 2) {
-        position -= pdfHeight;
+      // Halaman Berikutnya
+      while (heightRemaining > 1) { 
+        position -= usableHeightMm;
         pdf.addPage();
         pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
-        heightRemaining -= pdfHeight;
+        
+        pdf.setFillColor(255, 255, 255);
+        pdf.rect(0, 0, pdfWidth, marginTop, 'F'); 
+        pdf.setFillColor(255, 255, 255);
+        pdf.rect(0, pdfHeight - marginBottom, pdfWidth, marginBottom, 'F'); 
+        
+        heightRemaining -= usableHeightMm;
       }
       
       pdf.save(`LPJ_${config.eventName || 'Laporan'}.pdf`);
-    } catch (err) { alert("Gagal memproses PDF."); } 
-    finally { window.scrollTo(0, scrollY); setIsExporting(false); }
+    } catch (err) { 
+      alert("Gagal memproses PDF."); 
+    } finally { 
+      window.scrollTo(0, scrollY); 
+      setIsExporting(false); 
+    }
   };
 
   const addTransaction = (e: React.FormEvent) => {
@@ -453,24 +471,28 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      <div className="bg-slate-800 py-20 flex flex-col items-center overflow-x-auto no-print">
-         <div className="bg-amber-900/50 text-amber-200 px-6 py-3 rounded-full text-xs font-black flex items-center gap-3 mb-8 border border-amber-500/30 shadow-2xl">
+      <div className="bg-slate-800 py-20 flex flex-col items-center overflow-x-auto no-print w-full">
+         <div className="bg-amber-900/50 text-amber-200 px-6 py-3 rounded-full text-xs font-black flex items-center gap-3 mb-8 border border-amber-500/30 shadow-2xl min-w-max">
             <Keyboard className="w-4 h-4" /> <span>EDITOR PREVIEW: KLIK TEKS UNTUK EDIT MANUAL SEBELUM PDF</span>
          </div>
          
-         <div ref={reportRef} className="a4-preview flex flex-col shadow-2xl bg-white !text-slate-900">
+         <div ref={reportRef} className="a4-preview flex flex-col shadow-2xl bg-white !text-slate-900 relative box-border mx-auto" style={{ width: '800px' }}>
             {config.reportMode === 'Lengkap' && (
-              <div className="flex flex-col items-center justify-center text-center h-[1122px] mb-0 pb-20 pdf-section border-b-2 border-slate-100 overflow-hidden">
-                 {config.logoBase64 && <img src={config.logoBase64} className="w-40 h-40 object-contain mb-12" alt="Logo" />}
-                 <h1 className="text-3xl font-bold uppercase tracking-[0.2em] mb-4 text-black" contentEditable suppressContentEditableWarning>{config.reportTitle}</h1>
-                 <h2 className="text-5xl font-black text-blue-900 mt-4 uppercase leading-tight max-w-2xl" contentEditable suppressContentEditableWarning>{config.eventName || '[NAMA KEGIATAN]'}</h2>
-                 <div className="w-32 h-1 bg-blue-900 my-10"></div>
-                 <p className="text-2xl font-bold uppercase text-slate-700" contentEditable suppressContentEditableWarning>{config.organizationName}</p>
-                 <div className="mt-auto"><p className="text-xl font-bold uppercase tracking-widest text-black" contentEditable suppressContentEditableWarning>{config.location || '[LOKASI & TAHUN]'}</p></div>
+              <div className="flex flex-col items-center text-center cover-page pdf-section relative box-border overflow-hidden" style={{ height: '1017px', paddingTop: '100px', paddingBottom: '60px' }}>
+                 {config.logoBase64 && <img src={config.logoBase64} className="w-40 h-40 object-contain mb-8" alt="Logo" />}
+                 <h1 className="text-3xl font-bold uppercase tracking-[0.2em] mb-4 text-black px-12" contentEditable suppressContentEditableWarning>{config.reportTitle}</h1>
+                 <h2 className="text-5xl font-black text-blue-900 mt-4 uppercase leading-tight px-12" contentEditable suppressContentEditableWarning>{config.eventName || '[NAMA KEGIATAN]'}</h2>
+                 <div className="w-32 h-1 bg-blue-900 my-8"></div>
+                 <p className="text-2xl font-bold uppercase text-slate-700 px-12" contentEditable suppressContentEditableWarning>{config.organizationName}</p>
+                 
+                 <div className="absolute bottom-20 w-full text-center">
+                    <p className="text-xl font-bold uppercase tracking-widest text-black" contentEditable suppressContentEditableWarning>{config.location || '[LOKASI & TAHUN]'}</p>
+                 </div>
               </div>
             )}
 
-            <div className="border-b-4 border-double border-black pb-8 mb-12 flex items-center gap-6 pdf-section kop-section">
+            {/* FIX PADDING: pt-10 dihapus agar Kop naik merapat ke batas atas kertas di halaman 2 */}
+            <div className="border-b-4 border-double border-black pb-8 mb-12 flex items-center gap-6 pdf-section kop-section px-12 pt-2">
               {config.logoBase64 && <img src={config.logoBase64} className="w-24 h-24 object-contain" alt="Kop" />}
               <div className={`flex-1 ${config.logoBase64 ? 'text-left' : 'text-center'}`}>
                 <h1 className="text-xl font-bold uppercase underline tracking-wider text-black" contentEditable suppressContentEditableWarning>{config.reportTitle}</h1>
@@ -480,7 +502,7 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            <div className="mb-10 px-4 pdf-section pdf-text-block" contentEditable suppressContentEditableWarning>
+            <div className="mb-10 px-12 pdf-section pdf-text-block" contentEditable suppressContentEditableWarning>
               <h3 className="font-bold text-lg border-l-8 border-blue-900 pl-4 mb-4 uppercase text-black">I. PENDAHULUAN</h3>
               <div className="space-y-4 text-base text-justify leading-relaxed text-black">
                 <p className="font-bold underline mb-1">1.1 Latar Belakang</p>
@@ -497,7 +519,7 @@ const App: React.FC = () => {
             </div>
 
             {config.reportMode === 'Lengkap' && (
-              <div className="mb-10 px-4 pdf-section pdf-text-block" contentEditable suppressContentEditableWarning>
+              <div className="mb-10 px-12 pdf-section pdf-text-block" contentEditable suppressContentEditableWarning>
                 <h3 className="font-bold text-lg border-l-8 border-blue-900 pl-4 mb-4 uppercase text-black">II. PELAKSANAAN KEGIATAN</h3>
                 <div className="space-y-4 text-base text-justify leading-relaxed text-black">
                   <p className="font-bold underline mb-1">2.1 Waktu dan Tempat</p>
@@ -508,7 +530,7 @@ const App: React.FC = () => {
               </div>
             )}
 
-            <div className="mb-10 px-4 pdf-section keuangan-start">
+            <div className="mb-10 px-12 pdf-section keuangan-start">
               <h3 className="font-bold text-lg border-l-8 border-blue-900 pl-4 mb-6 uppercase text-black">
                 {config.reportMode === 'Cepat' ? 'II. LAPORAN KEUANGAN' : 'III. LAPORAN KEUANGAN'}
               </h3>
@@ -523,8 +545,9 @@ const App: React.FC = () => {
               </table>
             </div>
 
-            <div className="mb-12 px-4 pdf-section pdf-text-block penutup-start" contentEditable suppressContentEditableWarning>
-              <h3 className="font-bold text-lg border-l-8 border-blue-900 pl-4 mb-4 uppercase text-black pt-10">
+            <div className="mb-12 px-12 pdf-section pdf-text-block penutup-start" contentEditable suppressContentEditableWarning>
+              {/* FIX PADDING: pt-10 dihapus agar Penutup sejajar rata dengan atas kertas */}
+              <h3 className="font-bold text-lg border-l-8 border-blue-900 pl-4 mb-4 uppercase text-black">
                 {config.reportMode === 'Cepat' ? 'III. PENUTUP' : 'IV. EVALUASI DAN PENUTUP'}
               </h3>
               <div className="space-y-4 text-base text-justify leading-relaxed text-black">
@@ -540,7 +563,8 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            <div className="mt-auto pt-16 pb-12 px-4 pdf-section signature-start" contentEditable suppressContentEditableWarning>
+            {/* FIX PADDING: mt-auto & pt-16 dihapus agar tanda tangan ikut sejajar di atas kertas */}
+            <div className="pb-12 px-12 pdf-section signature-start pt-2" contentEditable suppressContentEditableWarning>
               <p className="text-center font-bold text-sm uppercase mb-16 underline tracking-widest text-black">PENGESAHAN LAPORAN</p>
               <div className={activeSigners.length === 1 ? 'flex justify-center' : 'grid grid-cols-2 text-center gap-y-16 gap-x-10'}>
                   {activeSigners.map((signer, idx) => (
@@ -550,8 +574,9 @@ const App: React.FC = () => {
             </div>
 
             {uniqueReceipts.length > 0 && (
-              <div className="px-4 pdf-section lampiran-start border-t-4 border-double border-slate-400">
-                <h3 className="text-center font-bold text-4xl mb-12 uppercase underline tracking-[0.2em] text-black pt-16 mt-0">LAMPIRAN BUKTI TRANSAKSI</h3>
+              <div className="px-12 pdf-section lampiran-start border-t-4 border-double border-slate-400">
+                {/* FIX PADDING: pt-6 diubah jadi pt-2 agar lampiran rata atas */}
+                <h3 className="text-center font-bold text-4xl mb-12 uppercase underline tracking-[0.2em] text-black pt-2 mt-0">LAMPIRAN BUKTI TRANSAKSI</h3>
                 <div className="flex flex-wrap gap-x-10 gap-y-12 justify-center pb-20">
                   {uniqueReceipts.map((t, idx) => (
                     <div key={idx} className="border-2 border-slate-200 p-6 rounded-[2.5rem] bg-white flex flex-col items-center shadow-sm receipt-card w-[45%] min-h-[400px]">
